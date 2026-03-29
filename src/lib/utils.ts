@@ -41,3 +41,12 @@ export function getDaysInMonth(yearMonth: string): Date[] {
 export function formatDateKo(dateStr: string): string {
   return format(new Date(dateStr), "M/d (EEE)", { locale: ko })
 }
+
+export function parseSectors(sectors: unknown): import('@/lib/types').SettingSector[] {
+  if (!sectors) return []
+  if (Array.isArray(sectors)) return sectors
+  if (typeof sectors === 'string') {
+    try { return JSON.parse(sectors) } catch { return [] }
+  }
+  return []
+}

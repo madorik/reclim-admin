@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
+import { parseSectors } from '@/lib/utils'
 import type { GymWithSchedule, GymSettingSchedule } from '@/lib/types'
 import type { ScheduleFormValues } from '@/lib/schemas'
 
@@ -16,7 +17,7 @@ export function useGymsWithSchedules(filters: ScheduleFilters) {
     queryFn: async () => {
       let query = supabase
         .from('climbing_gyms')
-        .select(`*, gym_setting_schedules!left(*)`)
+        .select(`*, gym_setting_schedules!left(id, year_month, status, source_image_url)`)
         .eq('gym_setting_schedules.year_month', filters.yearMonth)
         .not('instagram_url', 'is', null)
         .order('name')
@@ -35,6 +36,28 @@ export function useGymsWithSchedules(filters: ScheduleFilters) {
       if (error) throw error
       return data as GymWithSchedule[]
     },
+  })
+}
+
+export function useGymSchedule(gymId: string | undefined, yearMonth: string) {
+  return useQuery({
+    queryKey: ['gym-schedule', gymId, yearMonth],
+    queryFn: async () => {
+      if (!gymId) return null
+      const { data, error } = await supabase
+        .from('gym_setting_schedules')
+        .select('*')
+        .eq('gym_id', gymId)
+        .eq('year_month', yearMonth)
+        .maybeSingle()
+      if (error) throw error
+      if (!data) return null
+      return {
+        ...data,
+        sectors: parseSectors(data.sectors),
+      } as GymSettingSchedule
+    },
+    enabled: !!gymId,
   })
 }
 

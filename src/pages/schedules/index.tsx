@@ -1,12 +1,16 @@
 import { useState, useMemo } from 'react'
 import { useSearchParams, useNavigate } from 'react-router'
 import { PageContainer } from '@/components/layout/PageContainer'
-import { useGymsWithSchedules, useDeleteSchedule, useBrands } from '@/hooks/useSchedules'
-import { getCurrentYearMonth, getYearMonthOptions, formatYearMonth } from '@/lib/utils'
-import { ScheduleCalendar } from '@/components/schedule-calendar'
+import {
+  useGymsWithSchedules,
+  useGymSchedule,
+  useDeleteSchedule,
+  useBrands,
+} from '@/hooks/useSchedules'
+import { getCurrentYearMonth, getYearMonthOptions, formatYearMonth, formatDateKo } from '@/lib/utils'
+import { ScheduleCalendar, SectorLegend } from '@/components/schedule-calendar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Select,
@@ -20,10 +24,20 @@ import {
   DialogContent,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Plus, Search, Pencil, CalendarPlus, Trash2, Image as ImageIcon, ExternalLink } from 'lucide-react'
+import {
+  Plus,
+  Search,
+  Pencil,
+  CalendarPlus,
+  Trash2,
+  ExternalLink,
+  Image as ImageIcon,
+  ChevronRight,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { SECTOR_COLORS } from '@/components/color-picker'
-import type { GymWithSchedule, GymSettingSchedule } from '@/lib/types'
+import { cn } from '@/lib/utils'
+import type { GymWithSchedule } from '@/lib/types'
 
 const REGIONS = [
   { value: '서울', label: '서울' },
@@ -47,6 +61,7 @@ export default function ScheduleListPage() {
   const navigate = useNavigate()
 
   const yearMonth = searchParams.get('ym') ?? getCurrentYearMonth()
+  const selectedGymId = searchParams.get('gym') ?? ''
   const searchQuery = searchParams.get('q') ?? ''
   const regionFilter = searchParams.get('region') ?? ''
   const brandFilter = searchParams.get('brand') ?? ''
@@ -61,10 +76,15 @@ export default function ScheduleListPage() {
     region: regionFilter || undefined,
     brand: brandFilter || undefined,
   })
+  const { data: activeSchedule, isLoading: scheduleLoading } = useGymSchedule(
+    selectedGymId || undefined,
+    yearMonth,
+  )
   const deleteSchedule = useDeleteSchedule()
 
   const handleDelete = (scheduleId: string, gymName: string) => {
-    if (!confirm(`"${gymName}"의 ${formatYearMonth(yearMonth)} 세팅일정을 삭제하시겠습니까?`)) return
+    if (!confirm(`"${gymName}"의 ${formatYearMonth(yearMonth)} 세팅일정을 삭제하시겠습니까?`))
+      return
     deleteSchedule.mutate(scheduleId, {
       onSuccess: () => toast.success('세팅일정이 삭제되었습니다'),
       onError: () => toast.error('삭제에 실패했습니다'),
@@ -87,296 +107,343 @@ export default function ScheduleListPage() {
     if (e.key === 'Enter') handleSearch()
   }
 
-  // Separate registered / unregistered gyms
-  const { registered, unregistered } = useMemo(() => {
-    if (!gyms) return { registered: [], unregistered: [] }
-    const reg: { gym: GymWithSchedule; schedule: GymSettingSchedule }[] = []
-    const unreg: GymWithSchedule[] = []
-    for (const gym of gyms) {
-      const s = gym.gym_setting_schedules?.[0]
-      if (s) {
-        reg.push({ gym, schedule: s })
-      } else {
-        unreg.push(gym)
-      }
-    }
-    return { registered: reg, unregistered: unreg }
-  }, [gyms])
+  const selectGym = (gymId: string) => updateParam('gym', gymId)
 
-  const totalCount = gyms?.length ?? 0
+  // Counts
+  const { registered, unregistered, selectedGym } = useMemo(() => {
+    if (!gyms) return { registered: 0, unregistered: 0, selectedGym: undefined }
+    let reg = 0
+    let unreg = 0
+    let sel: GymWithSchedule | undefined
+    for (const gym of gyms) {
+      if (gym.gym_setting_schedules?.[0]) reg++
+      else unreg++
+      if (gym.id === selectedGymId) sel = gym
+    }
+    return { registered: reg, unregistered: unreg, selectedGym: sel }
+  }, [gyms, selectedGymId])
 
   return (
     <PageContainer
       title="세팅일정 관리"
-      description={`${formatYearMonth(yearMonth)} 클라이밍장별 세팅일정 현황`}
+      description={`${formatYearMonth(yearMonth)} 세팅일정 현황`}
       actions={
-        <Button onClick={() => navigate(`/schedules/new?ym=${yearMonth}`)}>
+        <Button
+          size="sm"
+          onClick={() =>
+            navigate(
+              `/schedules/new?ym=${yearMonth}${selectedGymId ? `&gym_id=${selectedGymId}` : ''}`,
+            )
+          }
+        >
           <Plus className="h-4 w-4 mr-1" />
           새 일정 추가
         </Button>
       }
     >
-      {/* Filters */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <Select value={yearMonth} onValueChange={(v) => { if (v) updateParam('ym', v) }}>
-          <SelectTrigger className="w-[150px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {monthOptions.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <div className="flex items-center gap-1">
-          <Select
-            value={regionFilter || undefined}
-            onValueChange={(v) => { if (v) updateParam('region', v) }}
-          >
-            <SelectTrigger className="w-[110px]">
-              <SelectValue placeholder="전체 지역" />
+      <div className="flex gap-5 min-h-[calc(100vh-10rem)]">
+        {/* ── Left Panel: Gym List ── */}
+        <div className="w-72 shrink-0 flex flex-col gap-3">
+          {/* Month selector */}
+          <Select value={yearMonth} onValueChange={(v) => { if (v) updateParam('ym', v) }}>
+            <SelectTrigger className="w-full">
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {REGIONS.map((r) => (
-                <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+              {monthOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          {regionFilter && (
-            <button
-              type="button"
-              onClick={() => updateParam('region', '')}
-              className="text-xs text-muted-foreground hover:text-foreground px-1"
-            >
-              ✕
-            </button>
-          )}
-        </div>
 
-        <div className="flex items-center gap-1">
-          <Select
-            value={brandFilter || undefined}
-            onValueChange={(v) => { if (v) updateParam('brand', v) }}
-          >
-            <SelectTrigger className="w-[140px]">
-              <SelectValue placeholder="전체 브랜드" />
-            </SelectTrigger>
-            <SelectContent>
-              {brands.map((b) => (
-                <SelectItem key={b} value={b}>{b}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {brandFilter && (
-            <button
-              type="button"
-              onClick={() => updateParam('brand', '')}
-              className="text-xs text-muted-foreground hover:text-foreground px-1"
-            >
-              ✕
-            </button>
-          )}
-        </div>
-
-        <div className="flex items-center gap-1 flex-1 max-w-xs">
-          <Input
-            placeholder="암장 이름 검색..."
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-          <Button variant="outline" size="icon" onClick={handleSearch}>
-            <Search className="h-4 w-4" />
-          </Button>
-        </div>
-
-        {/* Stats */}
-        {!isLoading && gyms && (
-          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-            <span>전체 {totalCount}</span>
-            <span className="text-foreground font-medium">등록 {registered.length}</span>
-            <span>미등록 {unregistered.length}</span>
+          {/* Filters */}
+          <div className="flex gap-1.5">
+            <div className="flex items-center gap-0.5 flex-1">
+              <Select
+                value={regionFilter || undefined}
+                onValueChange={(v) => { if (v) updateParam('region', v) }}
+              >
+                <SelectTrigger className="w-full h-8 text-xs">
+                  <SelectValue placeholder="지역" />
+                </SelectTrigger>
+                <SelectContent>
+                  {REGIONS.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {regionFilter && (
+                <button
+                  type="button"
+                  onClick={() => updateParam('region', '')}
+                  className="text-[10px] text-muted-foreground hover:text-foreground shrink-0"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-0.5 flex-1">
+              <Select
+                value={brandFilter || undefined}
+                onValueChange={(v) => { if (v) updateParam('brand', v) }}
+              >
+                <SelectTrigger className="w-full h-8 text-xs">
+                  <SelectValue placeholder="브랜드" />
+                </SelectTrigger>
+                <SelectContent>
+                  {brands.map((b) => (
+                    <SelectItem key={b} value={b}>{b}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {brandFilter && (
+                <button
+                  type="button"
+                  onClick={() => updateParam('brand', '')}
+                  className="text-[10px] text-muted-foreground hover:text-foreground shrink-0"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           </div>
-        )}
-      </div>
 
-      {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-[280px] rounded-xl" />
-          ))}
-        </div>
-      ) : (
-        <>
-          {/* ── Registered gyms: card grid with calendar ── */}
-          {registered.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-foreground">
-                등록됨
-                <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                  {registered.length}개
-                </span>
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {registered.map(({ gym, schedule }) => (
-                  <div
-                    key={gym.id}
-                    className="rounded-xl border border-border bg-card overflow-hidden hover:border-foreground/20 transition-colors"
-                  >
-                    {/* Header */}
-                    <div className="px-4 pt-3 pb-2 flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <h4 className="text-sm font-semibold truncate">{gym.name}</h4>
-                          {gym.instagram_url && (
-                            <a
-                              href={gym.instagram_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-pink-500 hover:text-pink-600 transition-colors shrink-0"
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          )}
-                        </div>
-                        {gym.brand_name && (
-                          <span className="text-[11px] text-muted-foreground">{gym.brand_name}</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        {schedule.source_image_url && (
-                          <button
-                            type="button"
-                            onClick={() => setPreviewImage(schedule.source_image_url)}
-                            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                            title="원본 이미지 보기"
-                          >
-                            <ImageIcon className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/schedules/${schedule.id}/edit`)}
-                          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                          title="수정"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(schedule.id, gym.name)}
-                          className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                          title="삭제"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
+          {/* Search */}
+          <div className="flex items-center gap-1">
+            <Input
+              placeholder="암장 검색..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8 text-xs"
+            />
+            <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={handleSearch}>
+              <Search className="h-3.5 w-3.5" />
+            </Button>
+          </div>
 
-                    {/* Calendar + optional image side by side */}
-                    <div className="px-4 pb-3">
-                      <div className={`flex gap-3 ${schedule.source_image_url ? '' : ''}`}>
-                        {/* Source image thumbnail */}
-                        {schedule.source_image_url && (
-                          <button
-                            type="button"
-                            onClick={() => setPreviewImage(schedule.source_image_url)}
-                            className="shrink-0 w-[90px] rounded-lg overflow-hidden border border-border/50 hover:border-foreground/20 transition-colors"
-                          >
-                            <img
-                              src={schedule.source_image_url}
-                              alt="세팅일정 원본"
-                              className="w-full h-full object-cover"
-                              loading="lazy"
-                            />
-                          </button>
-                        )}
-                        {/* Calendar */}
-                        <div className="flex-1 min-w-0">
-                          <ScheduleCalendar
-                            yearMonth={yearMonth}
-                            sectors={schedule.sectors}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+          {/* Gym list */}
+          <div className="flex-1 overflow-y-auto rounded-xl border border-border bg-card -mx-0.5 px-0.5">
+            {isLoading ? (
+              <div className="p-2 space-y-2">
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <Skeleton key={i} className="h-10 rounded-lg" />
                 ))}
               </div>
-            </div>
-          )}
-
-          {/* ── Unregistered gyms: compact table ── */}
-          {unregistered.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-foreground">
-                미등록
-                <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                  {unregistered.length}개
-                </span>
-              </h3>
-              <div className="rounded-xl border border-border bg-card overflow-hidden">
-                <div className="divide-y divide-border">
-                  {unregistered.map((gym) => (
-                    <div
+            ) : gyms && gyms.length > 0 ? (
+              <div className="py-1">
+                {gyms.map((gym) => {
+                  const schedule = gym.gym_setting_schedules?.[0]
+                  const isActive = gym.id === selectedGymId
+                  return (
+                    <button
                       key={gym.id}
-                      className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/30 transition-colors"
+                      type="button"
+                      onClick={() => selectGym(gym.id)}
+                      className={cn(
+                        'w-full text-left px-3 py-2 rounded-lg flex items-center gap-2 transition-colors',
+                        isActive
+                          ? 'bg-primary/10 text-primary'
+                          : 'hover:bg-muted/50 text-foreground',
+                      )}
                     >
+                      {/* Registration indicator */}
+                      <span
+                        className={cn(
+                          'w-2 h-2 rounded-full shrink-0',
+                          schedule ? 'bg-emerald-500' : 'bg-muted-foreground/30',
+                        )}
+                      />
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium truncate">{gym.name}</span>
-                          {gym.brand_name && (
-                            <span className="text-[11px] text-muted-foreground shrink-0">
-                              {gym.brand_name}
-                            </span>
-                          )}
-                          {gym.instagram_url && (
-                            <a
-                              href={gym.instagram_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-pink-500 hover:text-pink-600 transition-colors shrink-0"
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          )}
-                        </div>
-                        {gym.address && (
-                          <p className="text-xs text-muted-foreground truncate">{gym.address}</p>
+                        <div className="text-sm font-medium truncate">{gym.name}</div>
+                        {gym.brand_name && (
+                          <div className="text-[11px] text-muted-foreground truncate">
+                            {gym.brand_name}
+                          </div>
                         )}
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="shrink-0 ml-3 h-7 text-xs"
-                        onClick={() =>
-                          navigate(`/schedules/new?gym_id=${gym.id}&ym=${yearMonth}`)
-                        }
+                      {isActive && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-primary/50" />}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="p-6 text-center text-sm text-muted-foreground">
+                검색 결과가 없습니다
+              </div>
+            )}
+          </div>
+
+          {/* Stats */}
+          {!isLoading && gyms && (
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground px-1">
+              <span>전체 {gyms.length}</span>
+              <span>
+                <span className="text-emerald-500 font-medium">{registered}</span> 등록
+                {' / '}
+                <span>{unregistered}</span> 미등록
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* ── Right Panel: Schedule Detail ── */}
+        <div className="flex-1 min-w-0">
+          {!selectedGymId ? (
+            /* No gym selected */
+            <div className="h-full flex items-center justify-center rounded-xl border border-dashed border-border bg-muted/20">
+              <div className="text-center space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  좌측에서 클라이밍장을 선택해주세요
+                </p>
+              </div>
+            </div>
+          ) : scheduleLoading ? (
+            /* Loading */
+            <div className="space-y-4">
+              <Skeleton className="h-10 w-60" />
+              <Skeleton className="h-[400px] rounded-xl" />
+            </div>
+          ) : activeSchedule ? (
+            /* Schedule exists */
+            <div className="space-y-5">
+              {/* Header */}
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg font-semibold">{selectedGym?.name}</h2>
+                    {selectedGym?.instagram_url && (
+                      <a
+                        href={selectedGym.instagram_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-pink-500 hover:text-pink-600 transition-colors"
                       >
-                        <CalendarPlus className="h-3.5 w-3.5 mr-1" />
-                        세팅하기
-                      </Button>
-                    </div>
-                  ))}
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    )}
+                  </div>
+                  {selectedGym?.brand_name && (
+                    <p className="text-sm text-muted-foreground">{selectedGym.brand_name}</p>
+                  )}
                 </div>
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => navigate(`/schedules/${activeSchedule.id}/edit`)}
+                  >
+                    <Pencil className="h-3.5 w-3.5 mr-1" />
+                    수정
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-muted-foreground hover:text-destructive hover:border-destructive"
+                    onClick={() =>
+                      handleDelete(activeSchedule.id, selectedGym?.name ?? '')
+                    }
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Content: Calendar + Image */}
+              <div className="flex gap-6 items-start">
+                {/* Calendar */}
+                <div className="flex-1 min-w-0 rounded-xl border border-border bg-card p-5 space-y-4">
+                  <ScheduleCalendar
+                    yearMonth={yearMonth}
+                    sectors={activeSchedule.sectors}
+                    size="lg"
+                  />
+                  {/* Legend */}
+                  <div className="pt-3 border-t border-border/50">
+                    <SectorLegend sectors={activeSchedule.sectors} size="lg" />
+                  </div>
+
+                  {/* Sector date details */}
+                  <div className="space-y-2 pt-2">
+                    {activeSchedule.sectors.map((sector, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <span
+                          className="w-3 h-3 rounded-full shrink-0 mt-0.5"
+                          style={{ backgroundColor: colorHex(sector.color) }}
+                        />
+                        <div className="min-w-0">
+                          <span className="text-sm font-medium">{sector.name}</span>
+                          <div className="flex flex-wrap gap-1.5 mt-0.5">
+                            {sector.dates.sort().map((d) => (
+                              <span
+                                key={d}
+                                className="text-xs text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded"
+                              >
+                                {formatDateKo(d)}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Source image */}
+                {activeSchedule.source_image_url && (
+                  <div className="shrink-0 w-64 space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <ImageIcon className="h-3.5 w-3.5" />
+                      원본 이미지
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewImage(activeSchedule.source_image_url)}
+                      className="w-full rounded-xl border border-border overflow-hidden hover:border-foreground/20 transition-colors"
+                    >
+                      <img
+                        src={activeSchedule.source_image_url}
+                        alt="세팅일정 원본"
+                        className="w-full object-contain max-h-[480px] bg-muted/30"
+                        loading="lazy"
+                      />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* No schedule for this gym/month */
+            <div className="h-full flex items-center justify-center rounded-xl border border-dashed border-border bg-muted/20">
+              <div className="text-center space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">{selectedGym?.name}</span>의{' '}
+                  {formatYearMonth(yearMonth)} 세팅일정이 없습니다
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    navigate(`/schedules/new?gym_id=${selectedGymId}&ym=${yearMonth}`)
+                  }
+                >
+                  <CalendarPlus className="h-4 w-4 mr-1" />
+                  세팅일정 등록
+                </Button>
               </div>
             </div>
           )}
-
-          {/* Empty state */}
-          {totalCount === 0 && (
-            <div className="rounded-xl border border-border bg-card p-12 text-center text-muted-foreground">
-              검색 결과가 없습니다
-            </div>
-          )}
-        </>
-      )}
+        </div>
+      </div>
 
       {/* Image preview dialog */}
-      <Dialog open={!!previewImage} onOpenChange={(open) => { if (!open) setPreviewImage(null) }}>
+      <Dialog
+        open={!!previewImage}
+        onOpenChange={(open) => {
+          if (!open) setPreviewImage(null)
+        }}
+      >
         <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-auto p-2">
           <DialogTitle className="sr-only">세팅일정 원본 이미지</DialogTitle>
           {previewImage && (

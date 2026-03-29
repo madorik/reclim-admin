@@ -1,29 +1,33 @@
 import { useMemo } from 'react'
 import type { SettingSector } from '@/lib/types'
 import { SECTOR_COLORS } from '@/components/color-picker'
+import { cn } from '@/lib/utils'
 
 interface ScheduleCalendarProps {
   yearMonth: string
   sectors: SettingSector[]
+  size?: 'sm' | 'lg'
 }
 
 /** sector color value → hex */
 function colorHex(colorValue: string | undefined): string {
-  if (!colorValue) return '#9CA3AF' // default gray
+  if (!colorValue) return '#9CA3AF'
   return SECTOR_COLORS.find((c) => c.value === colorValue)?.hex ?? '#9CA3AF'
 }
 
-const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토']
+/** Monday-start Korean weekdays */
+const WEEKDAYS = ['월', '화', '수', '목', '금', '토', '일']
 
-export function ScheduleCalendar({ yearMonth, sectors }: ScheduleCalendarProps) {
+export function ScheduleCalendar({ yearMonth, sectors, size = 'sm' }: ScheduleCalendarProps) {
   const { weeks, dateColorMap } = useMemo(() => {
     const [year, month] = yearMonth.split('-').map(Number)
     const firstDay = new Date(year, month - 1, 1)
     const lastDay = new Date(year, month, 0)
     const daysInMonth = lastDay.getDate()
-    const startDow = firstDay.getDay() // 0=Sun
+    // Monday=0, Sunday=6
+    const startDow = (firstDay.getDay() + 6) % 7
 
-    // Build map: day number → list of sector colors
+    // day number → list of sector hex colors
     const map = new Map<number, string[]>()
     for (const sector of sectors) {
       for (const dateStr of sector.dates) {
@@ -37,7 +41,7 @@ export function ScheduleCalendar({ yearMonth, sectors }: ScheduleCalendarProps) 
       }
     }
 
-    // Build weeks grid
+    // Build weeks grid (Monday-start)
     const grid: (number | null)[][] = []
     let week: (number | null)[] = Array(startDow).fill(null)
     for (let d = 1; d <= daysInMonth; d++) {
@@ -55,6 +59,8 @@ export function ScheduleCalendar({ yearMonth, sectors }: ScheduleCalendarProps) 
     return { weeks: grid, dateColorMap: map }
   }, [yearMonth, sectors])
 
+  const isLg = size === 'lg'
+
   return (
     <div className="select-none">
       {/* Weekday headers */}
@@ -62,7 +68,11 @@ export function ScheduleCalendar({ yearMonth, sectors }: ScheduleCalendarProps) 
         {WEEKDAYS.map((d, i) => (
           <div
             key={d}
-            className={`text-center text-[10px] font-medium pb-0.5 ${i === 0 ? 'text-red-400' : i === 6 ? 'text-blue-400' : 'text-muted-foreground'}`}
+            className={cn(
+              'text-center font-medium pb-1',
+              isLg ? 'text-xs' : 'text-[10px]',
+              i === 5 ? 'text-blue-400' : i === 6 ? 'text-red-400' : 'text-muted-foreground',
+            )}
           >
             {d}
           </div>
@@ -74,30 +84,38 @@ export function ScheduleCalendar({ yearMonth, sectors }: ScheduleCalendarProps) 
         {weeks.map((week, wi) =>
           week.map((day, di) => {
             const colors = day ? dateColorMap.get(day) : undefined
-            const isSun = di === 0
-            const isSat = di === 6
+            const hasColors = colors && colors.length > 0
+            const isSat = di === 5
+            const isSun = di === 6
             return (
               <div
                 key={`${wi}-${di}`}
-                className={`relative flex flex-col items-center py-0.5 min-h-[28px] rounded-sm ${
-                  colors && colors.length > 0 ? 'bg-muted/50' : ''
-                }`}
+                className={cn(
+                  'relative flex flex-col items-center rounded-sm',
+                  isLg ? 'py-1.5 min-h-[44px]' : 'py-0.5 min-h-[28px]',
+                  hasColors && 'bg-muted/50',
+                )}
               >
                 {day && (
                   <>
                     <span
-                      className={`text-[11px] leading-tight ${
-                        isSun ? 'text-red-400' : isSat ? 'text-blue-400' : 'text-foreground/70'
-                      }`}
+                      className={cn(
+                        'leading-tight',
+                        isLg ? 'text-sm' : 'text-[11px]',
+                        isSun ? 'text-red-400' : isSat ? 'text-blue-400' : 'text-foreground/70',
+                      )}
                     >
                       {day}
                     </span>
-                    {colors && colors.length > 0 && (
-                      <div className="flex gap-[2px] mt-[1px]">
+                    {hasColors && (
+                      <div className={cn('flex mt-[2px]', isLg ? 'gap-1' : 'gap-[2px]')}>
                         {colors.slice(0, 3).map((hex, ci) => (
                           <span
                             key={ci}
-                            className="w-[6px] h-[6px] rounded-full shrink-0"
+                            className={cn(
+                              'rounded-full shrink-0',
+                              isLg ? 'w-2 h-2' : 'w-[6px] h-[6px]',
+                            )}
                             style={{ backgroundColor: hex }}
                           />
                         ))}
@@ -113,21 +131,40 @@ export function ScheduleCalendar({ yearMonth, sectors }: ScheduleCalendarProps) 
           }),
         )}
       </div>
+    </div>
+  )
+}
 
-      {/* Sector legend */}
-      <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1.5 pt-1.5 border-t border-border/50">
-        {sectors.map((sector, i) => (
-          <div key={i} className="flex items-center gap-1">
-            <span
-              className="w-2 h-2 rounded-full shrink-0"
-              style={{ backgroundColor: colorHex(sector.color) }}
-            />
-            <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-              {sector.name}
-            </span>
-          </div>
-        ))}
-      </div>
+/** Sector legend (rendered separately from calendar) */
+export function SectorLegend({
+  sectors,
+  size = 'sm',
+}: {
+  sectors: SettingSector[]
+  size?: 'sm' | 'lg'
+}) {
+  const isLg = size === 'lg'
+  return (
+    <div className={cn('flex flex-wrap', isLg ? 'gap-x-4 gap-y-1.5' : 'gap-x-2 gap-y-0.5')}>
+      {sectors.map((sector, i) => (
+        <div key={i} className="flex items-center gap-1.5">
+          <span
+            className={cn('rounded-full shrink-0', isLg ? 'w-3 h-3' : 'w-2 h-2')}
+            style={{ backgroundColor: colorHex(sector.color) }}
+          />
+          <span
+            className={cn(
+              'text-muted-foreground whitespace-nowrap',
+              isLg ? 'text-sm' : 'text-[10px]',
+            )}
+          >
+            {sector.name}
+            {isLg && sector.dates.length > 0 && (
+              <span className="text-foreground/50 ml-1">({sector.dates.length}일)</span>
+            )}
+          </span>
+        </div>
+      ))}
     </div>
   )
 }
